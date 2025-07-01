@@ -12,6 +12,7 @@ import pytesseract
 from tqdm import tqdm
 from functools import wraps
 from typing import Callable
+from pathlib import Path
 import zipfile
 import shutil
 
@@ -146,9 +147,12 @@ def process_receipts(receipt_path: str, course_code: str) -> None:
 
 
 def convert_to_zip(folder_path: str) -> None:
+    """lazy evaluation with generator"""
     with zipfile.ZipFile(f"{folder_path}.zip", "w", zipfile.ZIP_DEFLATED) as zipf:
-        for file in os.listdir(folder_path):
-            zipf.write(os.path.join(folder_path, file), file)
+        for file_path in Path(folder_path).iterdir():
+            zipf.write(file_path, file_path.name)
+
+    # Delete original folder (after ZIP is confirmed written)
     shutil.rmtree(folder_path)
 
 
