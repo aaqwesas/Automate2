@@ -152,30 +152,36 @@ def convert_to_zip(folder_path: str) -> None:
     shutil.rmtree(folder_path)
 
 
+def process_cert(cert, course_code: str) -> None:
+    if not cert:
+        logger.info("No certificate PDFs found.")
+        return None
+    with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+        process_func = partial(process_certificate, course_code=course_code)
+        list(tqdm(executor.map(process_func, cert), total=len(cert)))
+
+    convert_to_zip("Split_Certificates")
+
+
+def process_receipt(receipt, course_code: str) -> None:
+    if not receipt:
+        logger.info("No receipt PDFs found.")
+        return None
+    with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+        process_func = partial(process_receipts, course_code=course_code)
+        list(tqdm(executor.map(process_func, receipt), total=len(receipt)))
+
+    convert_to_zip("Split_Receipts")
+
+
 @brenchmark_func
 def main():
     course_code: str = input("Enter course code: ").strip()
     certificates: list[str] = sorted(glob.glob("Certificates/*.pdf"))
     receipts: list[str] = sorted(glob.glob("Receipts/*.pdf"))
 
-    if not certificates:
-        logger.error("No certificate PDFs found.")
-        return
-
-    with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-        process_func = partial(process_certificate, course_code=course_code)
-        list(tqdm(executor.map(process_func, certificates), total=len(certificates)))
-
-    if not receipts:
-        logger.error("No receipt PDFs found.")
-        return
-
-    with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-        process_func = partial(process_receipts, course_code=course_code)
-        list(tqdm(executor.map(process_func, receipts), total=len(receipts)))
-
-    convert_to_zip("Split_Certificates")
-    convert_to_zip("Split_Receipts")
+    process_cert(certificates, course_code)
+    process_receipt(receipts, course_code)
 
 
 if __name__ == "__main__":
