@@ -14,21 +14,27 @@ from functools import wraps
 from typing import Callable
 from pathlib import Path
 import zipfile
+from typing import Generator
 import shutil
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(levelname)s - %(message)s",
+    handlers=[logging.FileHandler("app.log", "a", "utf-8"), logging.StreamHandler()],
     datefmt="%Y-%m-%d %H:%M:%S",
 )
 
 logger = logging.getLogger(__name__)
 
-CERT_PATTERN = re.compile(
+CERT_PATTERN: re.Pattern = re.compile(
     r"to\s+certify\s+that\s+"
-    r"(?P<name>[A-Za-z][A-Za-z\s'-]+?)"
+    r"(?P<name>[A-Za-z][A-Za-z\s'-.]+?)"
     r"\s+has",
     flags=re.IGNORECASE,
+)
+
+REPT_PATTERN: re.Pattern = re.compile(
+    r"Payer\s+(?P<name>.*?)\s+Amount", flags=re.IGNORECASE
 )
 
 MAX_WORKERS = min(32, (os.cpu_count() or 1) + 4)
@@ -46,93 +52,58 @@ def brenchmark_func(func: Callable):
     return wrapper
 
 
-@brenchmark_func
 def pdf_to_text_whitelist(
     pdf_path: str, dpi: int = 150, lang: str = "eng", poppler_path: str = None
-) -> list[str]:
+) -> Generator[str, None, None]:
     images = convert_from_path(pdf_path, dpi=dpi, poppler_path=poppler_path)
     whitelist: str = string.ascii_letters + " ._-"
     tesseract_config = f'--psm 1 -c tessedit_char_whitelist="{whitelist}"'
-    pages: list[str] = []
     for img in images:
         text = pytesseract.image_to_string(img, lang=lang, config=tesseract_config)
         text = " ".join(text.split())
-        pages.append(text)
-    return pages
+        yield text
 
 
-def extract_name_between(pages: list[str]) -> list[str | None]:
-    pattern: re.Pattern = re.compile(
-        r"Payer\s+(?P<name>.*?)\s+Amount", flags=re.IGNORECASE
-    )
-    names: list[str | None] = []
+def extract_name_between(pages: list[str]) -> Generator[str | None, None, None]:
     for text in pages:
-        m = pattern.search(text)
-        if m:
-            name = m.group("name").strip()
-            names.append(name)
-        else:
-            names.append(None)
-    return names
+        m = REPT_PATTERN.search(text)
+        yield m.group("name").strip() if m else None
 
 
-def extract_names_from_pages(pages: list[str]) -> list[str | None]:
-    names: list[str | None] = []
+def extract_names_from_pages(pages: list[str]) -> Generator[str | None, None, None]:
     for text in pages:
         m = CERT_PATTERN.search(text)
-        if m:
-            name = m.group("name").strip()
-            names.append(name)
-        else:
-            names.append(None)
-    return names
+        yield m.group("name").strip() if m else None
 
 
 def split_pdf_to_pages(
     file_path: str,
     output_folder: str,
-    name_list: list[str | None],
+    name_list: Generator[str | None, None, None],
     course_code: str,
     prefix: str,
-) -> list[str]:
-    try:
-        if not os.path.exists(file_path):
-            raise FileNotFoundError(f"File not found: {file_path}")
-
-        os.makedirs(output_folder, exist_ok=True)
-        reader: pdf.PdfReader = pdf.PdfReader(file_path)
-
-        if len(name_list) != len(reader.pages):
-            raise ValueError(
-                f"Length of name_list ({len(name_list)}) does not match number of PDF pages ({len(reader.pages)})"
-            )
-
-        output_files: list[str] = []
-        for page_num, name in enumerate(name_list):
-            try:
-                writer = pdf.PdfWriter()
-                writer.add_page(reader.pages[page_num])
-                safe_name = (name or "Unknown").strip()
-                output_filename = os.path.join(
-                    output_folder, f"{safe_name}_{course_code}_{prefix}.pdf"
-                )
-                with open(output_filename, "wb") as out_file:
-                    writer.write(out_file)
-                output_files.append(output_filename)
-            except Exception as e:
-                logger.error(f"Error processing page {page_num}: {str(e)}")
-                continue
-        return output_files
-    except Exception as e:
-        logger.error(f"Error in split_pdf_to_pages: {str(e)}")
-        raise
+) -> None:
+    reader: pdf.PdfReader = pdf.PdfReader(file_path)
+    # get length of the generator
+    name_list_iter = iter(name_list)
+    for page_num, (page, name) in enumerate(zip(reader.pages, name_list_iter)):
+        writer = pdf.PdfWriter()
+        writer.add_page(page)
+        safe_name = (name or "Unknown").strip()
+        output_filename = os.path.join(
+            output_folder, f"{safe_name}_{course_code}_{prefix}.pdf"
+        )
+        try:
+            with open(output_filename, "wb") as out_file:
+                writer.write(out_file)
+        except Exception as e:
+            logger.error(f"Error processing page {page_num}: {str(e)}")
 
 
 def process_certificate(cert_path: str, course_code: str) -> None:
     logger.info(f"Processing certificate file: {cert_path}")
-    pages: list[str] = pdf_to_text_whitelist(cert_path)
-    names: list[str | None] = extract_names_from_pages(pages)
-    logger.info(f"Extracted names: {names}")
+    pages: Generator = pdf_to_text_whitelist(cert_path)
+    names: Generator = extract_names_from_pages(pages)
     split_pdf_to_pages(
         cert_path, "Split_Certificates", names, course_code, "Certificate"
     )
@@ -140,14 +111,12 @@ def process_certificate(cert_path: str, course_code: str) -> None:
 
 def process_receipts(receipt_path: str, course_code: str) -> None:
     logger.info(f"Processing receipt file: {receipt_path}")
-    pages: list[str] = pdf_to_text_whitelist(receipt_path)
-    names: list[str | None] = extract_name_between(pages)
-    logger.info(f"Extracted names: {names}")
+    pages: Generator = pdf_to_text_whitelist(receipt_path)
+    names: Generator = extract_name_between(pages)
     split_pdf_to_pages(receipt_path, "Split_Receipts", names, course_code, "Receipt")
 
 
 def convert_to_zip(folder_path: str) -> None:
-    """lazy evaluation with generator"""
     with zipfile.ZipFile(f"{folder_path}.zip", "w", zipfile.ZIP_DEFLATED) as zipf:
         for file_path in Path(folder_path).iterdir():
             zipf.write(file_path, file_path.name)
@@ -156,37 +125,30 @@ def convert_to_zip(folder_path: str) -> None:
     shutil.rmtree(folder_path)
 
 
-def process_cert(cert, course_code: str) -> None:
-    if not cert:
-        logger.info("No certificate PDFs found.")
+def process_pdf(
+    pdf_list: list[str], course_code: str, func: Callable, save_path: str
+) -> None:
+    if not pdf_list:
+        logger.info("No PDFs found.")
         return None
+    process_func = partial(func, course_code=course_code)
     with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-        process_func = partial(process_certificate, course_code=course_code)
-        list(tqdm(executor.map(process_func, cert), total=len(cert)))
+        list(tqdm(executor.map(process_func, pdf_list), total=len(pdf_list)))
 
-    convert_to_zip("Split_Certificates")
-
-
-def process_receipt(receipt, course_code: str) -> None:
-    if not receipt:
-        logger.info("No receipt PDFs found.")
-        return None
-    with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-        process_func = partial(process_receipts, course_code=course_code)
-        list(tqdm(executor.map(process_func, receipt), total=len(receipt)))
-
-    convert_to_zip("Split_Receipts")
+    convert_to_zip(save_path)
 
 
 @brenchmark_func
 def main():
-    course_code: str = input("Enter course code: ").strip()
     certificates: list[str] = sorted(glob.glob("Certificates/*.pdf"))
     receipts: list[str] = sorted(glob.glob("Receipts/*.pdf"))
 
-    process_cert(certificates, course_code)
-    process_receipt(receipts, course_code)
+    course_code: str = input("Enter course code: ").strip()
+    process_pdf(certificates, course_code, process_certificate, "Split_Certificates")
+    process_pdf(receipts, course_code, process_receipts, "Split_Receipts")
 
 
 if __name__ == "__main__":
+    os.makedirs("Split_Certificates", exist_ok=True)
+    os.makedirs("Split_Receipts", exist_ok=True)
     main()

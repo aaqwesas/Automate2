@@ -1,5 +1,6 @@
 Split_Certificates/
 Split_Receipts/
 Certificates/
-my-venv/
 Receipts/
+*.zip
+*.log
