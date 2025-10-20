@@ -5,18 +5,19 @@ import logging
 import time
 import string
 import concurrent.futures
-from functools import partial
 import unicodedata
+import zipfile
+import shutil
+
+from enum import StrEnum, auto
+from functools import partial, wraps
+from pathlib import Path
+from typing import Callable, Generator
+
 from pdf2image import convert_from_path
 import PyPDF2 as pdf
 import pytesseract
 from tqdm import tqdm
-from functools import wraps
-from typing import Callable
-from pathlib import Path
-import zipfile
-from typing import Generator
-import shutil
 
 logging.basicConfig(
     level=logging.INFO,
@@ -26,6 +27,15 @@ logging.basicConfig(
 )
 
 logger = logging.getLogger(__name__)
+
+class FolderName(StrEnum):
+    SPLIT_CERTIFICATES = auto()
+    SPLIT_RECEIPTS = auto()
+
+class filetype(StrEnum):
+    CERTIFICATE = auto()
+    RECEIPT = auto()
+
 
 CERT_PATTERN: re.Pattern = re.compile(
     r"to\s+certify\s+that\s+"
@@ -69,15 +79,9 @@ def pdf_to_text_whitelist(
         yield " ".join(text.split())
 
 
-def extract_name_between(pages: list[str]) -> Generator[str | None, None, None]:
+def extract_name(pages: list[str],match_pattern: str) -> Generator[str | None, None, None]:
     for text in pages:
-        m = REPT_PATTERN.search(text)
-        yield m.group("name").strip() if m else None
-
-
-def extract_names_from_pages(pages: list[str]) -> Generator[str | None, None, None]:
-    for text in pages:
-        m = CERT_PATTERN.search(text)
+        m = match_pattern.search(text)
         yield m.group("name").strip() if m else None
 
 
@@ -97,23 +101,23 @@ def split_pdf_to_pages(
         output_filename = Path(output_folder) / f"{safe_name}_{course_code}_{prefix}.pdf"
         with open(output_filename, "wb") as out_file:
             writer.write(out_file)
-        logger.info("Created: %s", output_filename)
+        # logger.info("Created: %s", output_filename)
 
 
 def process_certificate(cert_path: str, course_code: str) -> None:
     logger.info("Processing certificate file: %s", cert_path)
     pages: Generator = pdf_to_text_whitelist(cert_path)
-    names: Generator = extract_names_from_pages(pages)
+    names: Generator = extract_name(pages=pages, match_pattern=CERT_PATTERN)
     split_pdf_to_pages(
-        cert_path, "Split_Certificates", names, course_code, "Certificate"
+        cert_path, FolderName.SPLIT_CERTIFICATES, names, course_code, filetype.CERTIFICATE
     )
 
 
 def process_receipts(receipt_path: str, course_code: str) -> None:
     logger.info("Processing receipt file: %s", receipt_path)
     pages: Generator = pdf_to_text_whitelist(receipt_path)
-    names: Generator = extract_name_between(pages)
-    split_pdf_to_pages(receipt_path, "Split_Receipts", names, course_code, "Receipt")
+    names: Generator = extract_name(pages=pages, match_pattern=REPT_PATTERN)
+    split_pdf_to_pages(receipt_path, FolderName.SPLIT_RECEIPTS, names, course_code, filetype.RECEIPT)
 
 
 def convert_to_zip(folder_path: str) -> None:
@@ -139,18 +143,16 @@ def main():
     certificates: list[str] = sorted(glob.glob("Certificates/*.pdf"))
     receipts: list[str] = sorted(glob.glob("Receipts/*.pdf"))
 
-
     if not certificates and not receipts:
         logger.info("No PDF files found in Certificates or Receipts folders.")
         return
     course_code: str = input("Enter course code: ").strip()
     if certificates:
-        process_pdf(certificates, course_code, process_certificate, "Split_Certificates")
+        Path(FolderName.SPLIT_CERTIFICATES).mkdir(exist_ok=True)
+        process_pdf(pdf_list=certificates, course_code=course_code, func=process_certificate, save_path=FolderName.SPLIT_CERTIFICATES)
     if receipts:
-        process_pdf(receipts, course_code, process_receipts, "Split_Receipts")
-
+        Path(FolderName.SPLIT_RECEIPTS).mkdir(exist_ok=True)
+        process_pdf(pdf_list=receipts, course_code=course_code, func=process_receipts, save_path=FolderName.SPLIT_RECEIPTS)
 
 if __name__ == "__main__":
-    os.makedirs("Split_Certificates", exist_ok=True)
-    os.makedirs("Split_Receipts", exist_ok=True)
     main()
