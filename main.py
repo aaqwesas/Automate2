@@ -10,6 +10,7 @@ import unicodedata
 import zipfile
 import shutil
 
+from logging.handlers import RotatingFileHandler
 from enum import StrEnum, auto
 from functools import partial, wraps
 from pathlib import Path
@@ -53,20 +54,17 @@ def setup_logger(
 ) -> logging.Logger:
     logger = logging.getLogger(name)
     
-    # Avoid adding handlers multiple times
     if logger.handlers:
         return logger
 
     logger.setLevel(level)
     
-    # Formatter
     formatter = logging.Formatter(
         fmt="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S"
     )
 
-    # Rotating file handler
-    file_handler = logging.handlers.RotatingFileHandler(
+    file_handler = RotatingFileHandler(
         filename=log_file,
         maxBytes=max_bytes,
         backupCount=backup_count,
@@ -76,13 +74,11 @@ def setup_logger(
     file_handler.setFormatter(formatter)
     logger.addHandler(file_handler)
 
-    # Console handler
     console_handler = logging.StreamHandler(sys.stdout)
     console_handler.setLevel(level)
     console_handler.setFormatter(formatter)
     logger.addHandler(console_handler)
 
-    # Prevent propagation to root logger
     logger.propagate = False
 
     return logger
@@ -90,7 +86,7 @@ def setup_logger(
 
 logger = setup_logger(__name__, log_file="app.log")
 
-def brenchmark_func(func: Callable):
+def benchmark_func(func: Callable):
     @wraps(func)
     def wrapper(*args, **kwargs):
         start_time: float = time.perf_counter()
@@ -98,7 +94,6 @@ def brenchmark_func(func: Callable):
         end_time = time.perf_counter()
         logger.info(f"Function {func.__name__} took {end_time - start_time} seconds")
         return result
-
     return wrapper
 
 def sanitize_filename(name: str) -> str:
@@ -176,7 +171,7 @@ def process_pdf(
     convert_to_zip(save_path)
 
 
-@brenchmark_func
+@benchmark_func
 def main():
     certificates: list[str] = sorted(glob.glob("Certificates/*.pdf"))
     receipts: list[str] = sorted(glob.glob("Receipts/*.pdf"))

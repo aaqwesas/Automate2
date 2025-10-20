@@ -1,6 +1,3 @@
-Split_Certificates/
-Split_Receipts/
-Certificates/
-Receipts/
+*/
 *.zip
 *.log
